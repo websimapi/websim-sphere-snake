@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 
-const GRID_LAT = 30;
-const GRID_LON = 60;
-const RADIUS = 15;
-const TICK_MS = 100; // Faster tick for smoother response perception, interpolated visuals
+const GRID_LAT = 40;
+const GRID_LON = 80;
+const RADIUS = 25;
+const TICK_MS = 110;
 
 const MODES = {
   CPU: 'cpu',
@@ -113,12 +113,12 @@ export class SphereSnakeGame {
   _initLogic() {
     this.clock = new THREE.Clock();
     this.tickTimer = 0;
+    this.inputQueue = [];
     
     // Default Snake State
     this.snake = {
-      segments: [], // Array of { lat, lon, visualPos(Vec3) }
+      segments: [], 
       dir: { lat: 0, lon: 1 },
-      nextDir: { lat: 0, lon: 1 },
       color: 0x00ffcc
     };
     
@@ -131,51 +131,32 @@ export class SphereSnakeGame {
   }
 
   _initInput() {
-    this.keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
-    
-    window.addEventListener('keydown', (e) => {
-      if (this.keys.hasOwnProperty(e.code)) this.keys[e.code] = true;
-      if (['w','a','s','d'].includes(e.key)) {
-        const map = { w: 'ArrowUp', s: 'ArrowDown', a: 'ArrowLeft', d: 'ArrowRight' };
-        this.keys[map[e.key]] = true;
-      }
-    });
-    window.addEventListener('keyup', (e) => {
-      if (this.keys.hasOwnProperty(e.code)) this.keys[e.code] = false;
-      if (['w','a','s','d'].includes(e.key)) {
-        const map = { w: 'ArrowUp', s: 'ArrowDown', a: 'ArrowLeft', d: 'ArrowRight' };
-        this.keys[map[e.key]] = false;
-      }
-    });
-
-    // Touch Swipe Logic
-    let startX = 0, startY = 0;
-    this.renderer.domElement.addEventListener('touchstart', (e) => {
-      startX = e.touches[0].clientX;
-      startY = e.touches[0].clientY;
-    }, {passive: false});
-
-    this.renderer.domElement.addEventListener('touchmove', (e) => {
-      // Prevent scrolling
-      e.preventDefault(); 
-    }, {passive: false});
-
-    this.renderer.domElement.addEventListener('touchend', (e) => {
-      const dx = e.changedTouches[0].clientX - startX;
-      const dy = e.changedTouches[0].clientY - startY;
+    // Tap Zones
+    this.renderer.domElement.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      const x = e.clientX - rect.left;
       
-      if (Math.abs(dx) > 30 || Math.abs(dy) > 30) {
-        if (Math.abs(dx) > Math.abs(dy)) {
-          // Horizontal
-          if (dx > 0) this._attemptTurn({ lat: 0, lon: 1 }); // Right
-          else this._attemptTurn({ lat: 0, lon: -1 }); // Left
-        } else {
-          // Vertical
-          if (dy > 0) this._attemptTurn({ lat: 1, lon: 0 }); // Down
-          else this._attemptTurn({ lat: -1, lon: 0 }); // Up
-        }
+      // Tap Left half or Right half
+      if (x < rect.width / 2) {
+        this._queueTurn('left');
+      } else {
+        this._queueTurn('right');
       }
     });
+
+    // Keys
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft' || e.key === 'a') this._queueTurn('left');
+      if (e.key === 'ArrowRight' || e.key === 'd') this._queueTurn('right');
+    });
+  }
+
+  _queueTurn(action) {
+    // Allow buffering up to 2 inputs to prevent sticky feel but avoid massive queues
+    if (this.inputQueue.length < 2) {
+      this.inputQueue.push(action);
+    }
   }
 
   _initNetworking() {
@@ -253,10 +234,10 @@ export class SphereSnakeGame {
     this.score = 0;
     this.onScore(0);
     this.tickTimer = 0;
+    this.inputQueue = [];
     
     // Init Player
     this.snake.dir = { lat: 0, lon: 1 };
-    this.snake.nextDir = { lat: 0, lon: 1 };
     this.snake.segments = [];
     
     const startLat = Math.floor(GRID_LAT / 2);
@@ -301,30 +282,33 @@ export class SphereSnakeGame {
   }
 
   _tick() {
-    // 1. Move Player
-    this.snake.dir = this.snake.nextDir;
+    // 1. Process Input
+    if (this.inputQueue.length > 0) {
+      const turn = this.inputQueue.shift();
+      this._applyRelativeTurn(this.snake, turn);
+    }
+
+    // 2. Move Player
     this._moveSnake(this.snake);
 
-    // 2. Move CPU
+    // 3. Move CPU
     if (this.mode === MODES.CPU) {
       this._aiThink(this.cpuSnake);
       this._moveSnake(this.cpuSnake);
     }
 
-    // 3. Collision Checks
+    // 4. Collision Checks
     if (this._checkCollisions(this.snake)) {
       this.isRunning = false;
       this.onGameOver();
       return;
     }
     
-    // CPU Collision check (CPU just dies, doesn't end game unless you hit it)
     if (this.mode === MODES.CPU && this._checkCollisions(this.cpuSnake, true)) {
-       // Respawn CPU
        this._respawnCpu();
     }
 
-    // 4. Food Logic
+    // 5. Food Logic
     if (this._checkFood(this.snake)) {
       this._growSnake(this.snake);
       this.score++;
@@ -338,21 +322,55 @@ export class SphereSnakeGame {
       this._spawnFood();
     }
 
-    // 5. Sync State for Visuals
-    // Update 'prevPos' and 'currPos' for all segments for interpolation
+    // 6. Sync Visuals
     this._updateSegmentTargets(this.snake);
     if (this.mode === MODES.CPU) this._updateSegmentTargets(this.cpuSnake);
 
-    // 6. Network
+    // 7. Network
     this._sync();
+  }
+
+  _applyRelativeTurn(snake, turn) {
+    const { lat, lon } = snake.dir;
+    // Relative logic:
+    // Left: Lat-> -Lon, Lon-> Lat
+    // Right: Lat-> Lon, Lon-> -Lat
+    if (turn === 'left') {
+      snake.dir = { lat: -lon, lon: lat };
+    } else if (turn === 'right') {
+      snake.dir = { lat: lon, lon: -lat };
+    }
   }
 
   _moveSnake(snake) {
     const head = snake.segments[0];
-    const newLat = clamp(head.lat + snake.dir.lat, 0, GRID_LAT - 1);
-    const newLon = (head.lon + snake.dir.lon + GRID_LON) % GRID_LON;
+    let newLat = head.lat + snake.dir.lat;
+    let newLon = (head.lon + snake.dir.lon + GRID_LON) % GRID_LON;
     
-    // Shift body logic
+    // Pole Crossing Logic
+    // If we go off the top (Lat < 0) or bottom (Lat >= GRID_LAT), we cross to the other side
+    // The "Other Side" is (Lon + GRID_LON/2)
+    // And our Latitude direction flips (North becomes South)
+    
+    if (newLat < 0) {
+      // Crossed North Pole
+      newLat = 0;
+      newLon = (newLon + GRID_LON / 2) % GRID_LON;
+      snake.dir.lat = -snake.dir.lat; // Reverse Lat direction
+      snake.dir.lon = -snake.dir.lon; // Reverse Lon direction? No, if (1,0) -> (-1,0). 
+      // If we were moving North (-1, 0), we are now at Pole, moving South (1, 0) on opposite side.
+      // So yes, lat dir flips. Lon dir?
+      // If we hit pole diagonally? Not possible with current controls.
+      // Simply: Flip Lat direction.
+      snake.dir.lat = 1; // Force South
+    } else if (newLat >= GRID_LAT) {
+      // Crossed South Pole
+      newLat = GRID_LAT - 1;
+      newLon = (newLon + GRID_LON / 2) % GRID_LON;
+      snake.dir.lat = -1; // Force North
+    }
+
+    // Shift body
     for (let i = snake.segments.length - 1; i > 0; i--) {
       snake.segments[i].lat = snake.segments[i-1].lat;
       snake.segments[i].lon = snake.segments[i-1].lon;
@@ -435,23 +453,11 @@ export class SphereSnakeGame {
   /* ---------------- CONTROLS & AI ---------------- */
 
   _processInput() {
-    // Desktop Keys
-    if (this.keys.ArrowUp) this._attemptTurn({ lat: 1, lon: 0 }); // Note: Lat increases UP?
-    // Actually in 3D sphere:
-    // Lat 0 = top, Lat Max = bottom? Or Lat 0 = North pole?
-    // In our math: lat index 0..GRID_LAT.
-    // Let's assume index 0 is North Pole (Top), GRID_LAT is South.
-    // So "UP" key should DECREASE lat index.
-    if (this.keys.ArrowUp) this._attemptTurn({ lat: 1, lon: 0 });
-    if (this.keys.ArrowDown) this._attemptTurn({ lat: -1, lon: 0 });
-    if (this.keys.ArrowLeft) this._attemptTurn({ lat: 0, lon: -1 });
-    if (this.keys.ArrowRight) this._attemptTurn({ lat: 0, lon: 1 });
+    // Replaced by queue system in _tick
   }
 
   _attemptTurn(newDir) {
-    // Prevent 180 reverses
-    if (newDir.lat === -this.snake.dir.lat && newDir.lon === -this.snake.dir.lon) return;
-    this.snake.nextDir = newDir;
+    // Deprecated
   }
 
   _aiThink(snake) {
@@ -563,24 +569,34 @@ export class SphereSnakeGame {
   }
 
   _updateCamera() {
-    if (!this.snake.segments[0]) return;
+    if (this.snake.segments.length < 2) return;
     const headMesh = this.snake.group.children[0];
-    if (!headMesh) return;
+    const neckMesh = this.snake.group.children[1];
+    if (!headMesh || !neckMesh) return;
 
     const headPos = headMesh.position.clone();
-    const normal = headPos.clone().normalize();
+    const up = headPos.clone().normalize();
     
-    // Position camera "above" and "behind"
-    // We need a "forward" vector. 
-    // Since we are on a sphere, "forward" is tangential.
-    // We can approximate by taking (Head - PreviousHead).
-    // Or just simply pull camera out along normal and add some lag.
+    // Determine forward direction from body trailing
+    // This creates the "Follow" effect
+    const forward = new THREE.Vector3().subVectors(headPos, neckMesh.position).normalize();
+    
+    if (forward.lengthSq() < 0.01) return; // Wait for movement
 
-    const targetCamPos = normal.multiplyScalar(RADIUS + 25);
+    // Camera Goal: Behind snake, slightly above
+    const CAM_DIST = 35;
+    const CAM_HEIGHT = 20;
+
+    const targetPos = headPos.clone()
+      .sub(forward.multiplyScalar(CAM_DIST)) // Behind
+      .add(up.multiplyScalar(CAM_HEIGHT));   // Above
+
+    // Smooth lerp
+    this.camera.position.lerp(targetPos, 0.08);
     
-    // Smooth camera
-    this.camera.position.lerp(targetCamPos, 0.1);
-    this.camera.lookAt(headPos); // Always look at head
+    // Ensure camera up vector aligns with planet surface to prevent flipping
+    this.camera.up.lerp(up, 0.1);
+    this.camera.lookAt(headPos);
   }
 
   /* ---------------- HIGH SCORE & NET ---------------- */
@@ -646,15 +662,18 @@ export class SphereSnakeGame {
 /* ---------------- HELPERS ---------------- */
 
 function getCellPosition(latIdx, lonIdx, r) {
-  // Map grid to Sphere
-  // Lat: 0 to GRID_LAT. 0 = North Pole? No, let's map 0..LAT to -PI/2 .. PI/2
-  // Avoid poles slightly to prevent texture pinching if we had textures, but for grid it's fine.
+  // Map grid to Sphere with slight padding at poles to allow "crossing" over the cap
+  const minPhi = 0.05;
+  const maxPhi = Math.PI - 0.05;
   
-  const phi = (latIdx / (GRID_LAT - 1)) * Math.PI; // 0 to PI
-  const theta = (lonIdx / GRID_LON) * (Math.PI * 2); // 0 to 2PI
+  const phi = minPhi + (latIdx / (GRID_LAT - 1)) * (maxPhi - minPhi);
+  const theta = (lonIdx / GRID_LON) * (Math.PI * 2);
 
-  // Spherical to Cartesian
-  // y is up
+  // Standard Physics convention: Y is Up/North Pole here
+  // x = r sin(phi) cos(theta)
+  // z = r sin(phi) sin(theta)
+  // y = r cos(phi)
+  
   const x = r * Math.sin(phi) * Math.cos(theta);
   const z = r * Math.sin(phi) * Math.sin(theta);
   const y = r * Math.cos(phi);
