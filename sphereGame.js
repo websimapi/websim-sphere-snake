@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 const GRID_LAT = 24;
 const GRID_LON = 48;
-const RADIUS = 5.2;
+const RADIUS = 7.5;
 const TICK_MS = 120;
 
 const MODES = {
@@ -34,8 +34,8 @@ export class SphereSnakeGame {
 
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 100);
-    this.camera.position.set(0, 9, 12);
+    this.camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 120);
+    this.camera.position.set(0, 11, 16);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);
@@ -611,7 +611,7 @@ export class SphereSnakeGame {
     if (!this.snake) return;
     const headPos = cellToWorld(this.snake.headLat, this.snake.headLon);
     const normal = headPos.clone().normalize();
-    const desiredPos = headPos.clone().add(normal.multiplyScalar(3.2));
+    const desiredPos = headPos.clone().add(normal.multiplyScalar(4.6));
     // smooth follow
     this.camera.position.lerp(desiredPos, 0.15);
     this.camera.lookAt(headPos);
