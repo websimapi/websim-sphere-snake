@@ -2,119 +2,175 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Sphere Snake</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Neon Sphere Snake</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <style>
     html, body {
       margin: 0;
       padding: 0;
       overflow: hidden;
-      background: #050608;
+      background: #000000;
       touch-action: none;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      color: #f5f5f5;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      color: #fff;
+      user-select: none;
+      -webkit-user-select: none;
     }
     #app {
       position: fixed;
       inset: 0;
+      z-index: 1;
     }
-    canvas {
-      display: block;
-    }
-    .ui-root {
+    .ui-layer {
       position: fixed;
       inset: 0;
+      z-index: 10;
       pointer-events: none;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
-      padding: 10px 10px 14px;
-      box-sizing: border-box;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     }
-    .top-bar {
+    
+    /* Top HUD */
+    .hud-top {
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      gap: 8px;
+      align-items: flex-start;
+      padding: 16px;
       pointer-events: auto;
     }
-    .pill {
-      background: rgba(10, 12, 16, 0.9);
-      border-radius: 999px;
-      padding: 6px 10px;
-      display: inline-flex;
-      align-items: center;
+
+    .score-board {
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 8px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    }
+    .score-row {
+      display: flex;
+      align-items: baseline;
       gap: 8px;
-      font-size: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      box-shadow: 0 0 12px rgba(0, 0, 0, 0.5);
     }
-    .pill label {
-      opacity: 0.7;
+    .score-val {
+      font-size: 24px;
+      font-weight: 800;
+      color: #fff;
+      text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
     }
-    .pill strong {
-      font-weight: 600;
-    }
-    .mode-switch {
-      display: inline-flex;
-      background: rgba(10, 12, 16, 0.9);
-      border-radius: 999px;
-      padding: 3px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      box-shadow: 0 0 12px rgba(0, 0, 0, 0.5);
-      pointer-events: auto;
-    }
-    .mode-btn {
-      border: none;
-      border-radius: 999px;
-      padding: 5px 9px;
+    .score-label {
       font-size: 11px;
-      color: #d0d0d0;
-      background: transparent;
-      cursor: pointer;
-      min-width: 64px;
-    }
-    .mode-btn.active {
-      background: #1ea562;
-      color: #020304;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      opacity: 0.6;
       font-weight: 600;
     }
-    .mode-btn.secondary {
-      background: #242834;
-      color: #f5f5f5;
-      font-weight: 500;
+    .best-row {
+      font-size: 12px;
+      opacity: 0.7;
+      margin-top: 2px;
     }
-    .bottom-bar {
+
+    /* Mode Switcher */
+    .mode-toggle {
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 4px;
       display: flex;
-      justify-content: center;
-      pointer-events: none;
+      gap: 2px;
     }
-    .hint {
-      font-size: 10px;
+    .toggle-btn {
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-transform: uppercase;
+    }
+    .toggle-btn.active {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+      box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+    }
+
+    /* Bottom Overlay */
+    .hud-bottom {
+      margin-top: auto;
+      padding: 24px;
+      text-align: center;
       opacity: 0.6;
+      font-size: 13px;
+      letter-spacing: 0.5px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.8);
       pointer-events: none;
     }
-    .joystick-container {
+
+    /* Overlay for game over */
+    #game-over-modal {
       position: fixed;
-      right: 10px;
-      bottom: 18px;
-      width: 110px;
-      height: 110px;
+      inset: 0;
+      z-index: 20;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    #game-over-modal.visible {
+      opacity: 1;
       pointer-events: auto;
-      touch-action: none;
     }
-    @media (min-width: 800px) {
-      .joystick-container {
-        display: none;
-      }
+    .modal-content {
+      background: #111;
+      border: 1px solid #333;
+      padding: 32px;
+      border-radius: 20px;
+      text-align: center;
+      box-shadow: 0 0 40px rgba(0,0,0,0.8);
+      transform: scale(0.9);
+      transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
     }
+    #game-over-modal.visible .modal-content {
+      transform: scale(1);
+    }
+    h2 { margin: 0 0 8px 0; font-size: 32px; letter-spacing: -1px; }
+    p { margin: 0 0 24px 0; color: #888; }
+    button.primary-btn {
+      background: #fff;
+      color: #000;
+      border: none;
+      padding: 12px 32px;
+      font-size: 16px;
+      font-weight: 700;
+      border-radius: 99px;
+      cursor: pointer;
+      box-shadow: 0 0 20px rgba(255,255,255,0.3);
+      transition: transform 0.1s;
+    }
+    button.primary-btn:active {
+      transform: scale(0.96);
+    }
+
   </style>
   <script type="importmap">
   {
     "imports": {
       "three": "https://esm.sh/three@0.160.0",
-      "three/addons/controls/OrbitControls.js": "https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js",
-      "nipplejs": "https://esm.sh/nipplejs@0.9.0"
+      "three/addons/": "https://esm.sh/three@0.160.0/examples/jsm/"
     }
   }
   </script>
@@ -122,26 +178,36 @@
 <body>
   <div id="app"></div>
 
-  <div class="ui-root">
-    <div class="top-bar">
-      <div class="pill" id="score-pill">
-        <label>Score</label>
-        <strong id="score-value">0</strong>
-        <span style="opacity:.5;">•</span>
-        <label>Best</label>
-        <strong id="best-value">0</strong>
+  <div class="ui-layer">
+    <div class="hud-top">
+      <div class="score-board">
+        <div class="score-row">
+          <span class="score-val" id="score-val">0</span>
+          <span class="score-label">Score</span>
+        </div>
+        <div class="best-row">
+          BEST <span id="best-val">0</span>
+        </div>
       </div>
-      <div class="mode-switch">
-        <button class="mode-btn active" id="mode-cpu">CPU</button>
-        <button class="mode-btn" id="mode-rt">Realtime</button>
+
+      <div class="mode-toggle">
+        <button class="toggle-btn active" id="btn-cpu">Solo</button>
+        <button class="toggle-btn" id="btn-multi">Online</button>
       </div>
     </div>
-    <div class="bottom-bar">
-      <div class="hint">WASD / joystick to steer around the sphere</div>
+    
+    <div class="hud-bottom">
+      Swipe or use Arrow Keys to turn
     </div>
   </div>
 
-  <div class="joystick-container" id="joystick"></div>
+  <div id="game-over-modal">
+    <div class="modal-content">
+      <h2>CRASHED</h2>
+      <p>Final Score: <span id="final-score">0</span></p>
+      <button class="primary-btn" id="restart-btn">Play Again</button>
+    </div>
+  </div>
 
   <script type="module" src="./main.js"></script>
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>

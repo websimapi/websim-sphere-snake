@@ -1,708 +1,667 @@
 import * as THREE from 'three';
 
-const GRID_LAT = 24;
-const GRID_LON = 48;
-const RADIUS = 11;
-const TICK_MS = 120;
+const GRID_LAT = 30;
+const GRID_LON = 60;
+const RADIUS = 15;
+const TICK_MS = 100; // Faster tick for smoother response perception, interpolated visuals
 
 const MODES = {
   CPU: 'cpu',
   REALTIME: 'realtime',
 };
 
+/**
+ * Visual Interpolation Helper
+ * Since the game is grid-based, visual smoothness comes from interpolating
+ * position between `lastGridPos` and `currentGridPos` over the `TICK_MS` duration.
+ */
+
 export class SphereSnakeGame {
-  constructor({ container, onScoreChange, onBestChange }) {
+  constructor({ container, onScore, onBest, onGameOver }) {
     this.container = container;
-    this.onScoreChange = onScoreChange || (() => {});
-    this.onBestChange = onBestChange || (() => {});
+    this.onScore = onScore || (() => {});
+    this.onBest = onBest || (() => {});
+    this.onGameOver = onGameOver || (() => {});
+    
     this.mode = MODES.CPU;
     this.score = 0;
     this.best = 0;
+    this.isRunning = false;
 
     this._initScene();
     this._initLogic();
-    this._initControls();
-    this._initMultiplayer();
+    this._initInput();
+    this._initNetworking();
     this._initHighScore();
   }
 
-  /* ---------- Core setup ---------- */
-
   _initScene() {
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#050608');
-
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 160);
-    this.camera.position.set(0, 18, 28);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio || 1);
+    // SCENE
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color('#030305');
+    this.scene.fog = new THREE.FogExp2(0x030305, 0.015);
+
+    // CAMERA
+    this.camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 500);
+    this.camera.position.set(0, 0, 60);
+
+    // RENDERER
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(w, h);
+    this.renderer.shadowMap.enabled = true;
     this.container.appendChild(this.renderer.domElement);
 
-    const ambient = new THREE.AmbientLight('#9fb8ff', 0.5);
+    // LIGHTING
+    const ambient = new THREE.AmbientLight(0xffffff, 0.2);
     this.scene.add(ambient);
 
-    const dir = new THREE.DirectionalLight('#ffffff', 0.9);
-    dir.position.set(4, 7, 2);
-    this.scene.add(dir);
+    const hemi = new THREE.HemisphereLight(0xff0080, 0x0080ff, 0.3);
+    this.scene.add(hemi);
 
-    // Sphere world
-    const sphereGeo = new THREE.SphereGeometry(RADIUS, 48, 32);
-    const sphereMat = new THREE.MeshStandardMaterial({
-      color: '#111621',
-      roughness: 0.9,
-      metalness: 0.0,
-      wireframe: false,
-    });
-    const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-    this.scene.add(sphere);
-    this.worldSphere = sphere;
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(20, 30, 20);
+    dirLight.castShadow = true;
+    this.scene.add(dirLight);
 
-    // Subtle grid effect
-    const gridLines = new THREE.Group();
-    const gridMaterial = new THREE.LineBasicMaterial({ color: '#171c2a', linewidth: 1 });
-    for (let i = 1; i < GRID_LAT; i++) {
-      const lat = (i / GRID_LAT) * Math.PI - Math.PI / 2;
-      const latGeo = new THREE.BufferGeometry();
-      const segments = 64;
-      const positions = [];
-      for (let j = 0; j <= segments; j++) {
-        const lon = (j / segments) * Math.PI * 2;
-        const pos = latLonToVec3(lat, lon, RADIUS + 0.001);
-        positions.push(pos.x, pos.y, pos.z);
-      }
-      latGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      gridLines.add(new THREE.Line(latGeo, gridMaterial));
-    }
-    for (let j = 0; j < GRID_LON; j++) {
-      const lon = (j / GRID_LON) * Math.PI * 2;
-      const lonGeo = new THREE.BufferGeometry();
-      const segments = 64;
-      const positions = [];
-      for (let i = 0; i <= segments; i++) {
-        const lat = (i / segments) * Math.PI - Math.PI / 2;
-        const pos = latLonToVec3(lat, lon, RADIUS + 0.001);
-        positions.push(pos.x, pos.y, pos.z);
-      }
-      lonGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      gridLines.add(new THREE.Line(lonGeo, gridMaterial));
-    }
-    this.scene.add(gridLines);
-
-    // Snake group
-    this.snakeGroup = new THREE.Group();
-    this.scene.add(this.snakeGroup);
-
-    // Food mesh
-    const foodGeo = new THREE.SphereGeometry(0.25, 16, 12);
-    const foodMat = new THREE.MeshStandardMaterial({
-      color: '#ff4b6a',
-      emissive: '#ff4b6a',
-      emissiveIntensity: 0.5,
-      roughness: 0.4,
+    // PLANET
+    const planetGeo = new THREE.SphereGeometry(RADIUS, 64, 64);
+    const planetMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a0e,
+      roughness: 0.6,
       metalness: 0.2,
     });
+    this.planet = new THREE.Mesh(planetGeo, planetMat);
+    this.planet.receiveShadow = true;
+    this.scene.add(this.planet);
+
+    // NEON GRID
+    // We create a slightly larger wireframe sphere
+    const gridGeo = new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(RADIUS + 0.1, 4));
+    const gridMat = new THREE.LineBasicMaterial({ color: 0x1f2b3e, opacity: 0.3, transparent: true });
+    this.gridMesh = new THREE.LineSegments(gridGeo, gridMat);
+    this.scene.add(this.gridMesh);
+
+    // SNAKE CONTAINERS
+    this.snakeGroup = new THREE.Group();
+    this.scene.add(this.snakeGroup);
+    
+    this.opponentGroup = new THREE.Group();
+    this.scene.add(this.opponentGroup);
+
+    // FOOD
+    const foodGeo = new THREE.OctahedronGeometry(0.5, 0);
+    const foodMat = new THREE.MeshStandardMaterial({
+      color: 0xff0055,
+      emissive: 0xff0055,
+      emissiveIntensity: 1,
+    });
     this.foodMesh = new THREE.Mesh(foodGeo, foodMat);
+    
+    // Add point light to food
+    this.foodLight = new THREE.PointLight(0xff0055, 2, 8);
+    this.foodMesh.add(this.foodLight);
     this.scene.add(this.foodMesh);
 
-    // Other players' snakes for realtime mode
-    this.otherSnakesGroup = new THREE.Group();
-    this.scene.add(this.otherSnakesGroup);
-
-    this._renderLoop = this._renderLoop.bind(this);
+    // Bind loop
+    this._loop = this._loop.bind(this);
   }
 
   _initLogic() {
+    this.clock = new THREE.Clock();
     this.tickTimer = 0;
-    this.lastTime = performance.now();
-
-    this.direction = { lat: 0, lon: 1 }; // grid step
-    this.pendingDir = { lat: 0, lon: 1 };
-
+    
+    // Default Snake State
     this.snake = {
-      segments: {}, // key: index -> { latIndex, lonIndex }
-      length: 6,
-      headLat: Math.floor(GRID_LAT / 2),
-      headLon: Math.floor(GRID_LON / 4),
-      color: '#2fffd2',
+      segments: [], // Array of { lat, lon, visualPos(Vec3) }
+      dir: { lat: 0, lon: 1 },
+      nextDir: { lat: 0, lon: 1 },
+      color: 0x00ffcc
     };
-
-    for (let i = 0; i < this.snake.length; i++) {
-      this.snake.segments[String(i)] = {
-        latIndex: this.snake.headLat,
-        lonIndex: (this.snake.headLon - i + GRID_LON) % GRID_LON,
-      };
-    }
-
-    this._rebuildSnakeMeshes();
-
-    this._spawnFood();
-
+    
+    // CPU Snake State
     this.cpuSnake = {
-      segments: {},
-      length: 6,
-      headLat: Math.floor(GRID_LAT / 2),
-      headLon: Math.floor((3 * GRID_LON) / 4),
-      color: '#ffcf40',
+      segments: [],
+      dir: { lat: 0, lon: 1 },
+      color: 0xffaa00
     };
-    for (let i = 0; i < this.cpuSnake.length; i++) {
-      this.cpuSnake.segments[String(i)] = {
-        latIndex: this.cpuSnake.headLat,
-        lonIndex: (this.cpuSnake.headLon + i) % GRID_LON,
-      };
-    }
-    this._rebuildCpuSnakeMeshes();
-
-    this.cpuDir = { lat: 0, lon: -1 };
-
-    this.isDead = false;
   }
 
-  _initControls() {
-    this.keys = { w: false, a: false, s: false, d: false };
+  _initInput() {
+    this.keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+    
     window.addEventListener('keydown', (e) => {
-      const k = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd'].includes(k)) {
-        this.keys[k] = true;
-        this._updateDirectionFromKeys();
+      if (this.keys.hasOwnProperty(e.code)) this.keys[e.code] = true;
+      if (['w','a','s','d'].includes(e.key)) {
+        const map = { w: 'ArrowUp', s: 'ArrowDown', a: 'ArrowLeft', d: 'ArrowRight' };
+        this.keys[map[e.key]] = true;
       }
     });
     window.addEventListener('keyup', (e) => {
-      const k = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd'].includes(k)) {
-        this.keys[k] = false;
+      if (this.keys.hasOwnProperty(e.code)) this.keys[e.code] = false;
+      if (['w','a','s','d'].includes(e.key)) {
+        const map = { w: 'ArrowUp', s: 'ArrowDown', a: 'ArrowLeft', d: 'ArrowRight' };
+        this.keys[map[e.key]] = false;
       }
     });
 
-    // Tap / click to change direction
-    this.renderer.domElement.addEventListener('pointerdown', (event) => {
-      this._updateDirectionFromTap(event);
+    // Touch Swipe Logic
+    let startX = 0, startY = 0;
+    this.renderer.domElement.addEventListener('touchstart', (e) => {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    }, {passive: false});
+
+    this.renderer.domElement.addEventListener('touchmove', (e) => {
+      // Prevent scrolling
+      e.preventDefault(); 
+    }, {passive: false});
+
+    this.renderer.domElement.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      
+      if (Math.abs(dx) > 30 || Math.abs(dy) > 30) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          // Horizontal
+          if (dx > 0) this._attemptTurn({ lat: 0, lon: 1 }); // Right
+          else this._attemptTurn({ lat: 0, lon: -1 }); // Left
+        } else {
+          // Vertical
+          if (dy > 0) this._attemptTurn({ lat: 1, lon: 0 }); // Down
+          else this._attemptTurn({ lat: -1, lon: 0 }); // Up
+        }
+      }
     });
   }
 
-  _initMultiplayer() {
+  _initNetworking() {
     this.room = new WebsimSocket();
     this.room.initialize().then(() => {
-      this._subscribePresence();
-      this._syncPresence();
-    });
-  }
-
-  _subscribePresence() {
-    this.room.subscribePresence((presence) => {
-      if (this.mode !== MODES.REALTIME) return;
-      this._updateOtherSnakesFromPresence(presence);
-    });
-  }
-
-  _syncPresence() {
-    if (!this.room) return;
-    const packedSnake = packSnake(this.snake);
-    this.room.updatePresence({
-      mode: this.mode,
-      snake: packedSnake,
-      score: this.score,
+      this.room.subscribePresence((p) => {
+        if (this.mode === MODES.REALTIME) this._updateOpponents(p);
+      });
+      this._sync();
     });
   }
 
   _initHighScore() {
-    this.highScoreCollection = null;
-    this.highScoreRecordId = null;
     this._loadHighScore();
   }
 
-  async _loadHighScore() {
-    try {
-      const room = this.room || new WebsimSocket();
-      await room.initialize?.();
-      this.highScoreCollection = room.collection('sphere_snake_highscore_v1');
-
-      const existing = this.highScoreCollection.getList();
-      if (existing && existing.length > 0) {
-        const record = existing[0];
-        this.highScoreRecordId = record.id;
-        this.best = record.bestScore || 0;
-        this.onBestChange(this.best);
-      } else {
-        const record = await this.highScoreCollection.create({
-          bestScore: 0,
-          bestMode: MODES.CPU,
-        });
-        this.highScoreRecordId = record.id;
-        this.best = 0;
-        this.onBestChange(0);
-      }
-
-      this.highScoreCollection.subscribe((records) => {
-        if (!records || records.length === 0) return;
-        const rec = records[0];
-        this.highScoreRecordId = rec.id;
-        const val = rec.bestScore || 0;
-        if (val !== this.best) {
-          this.best = val;
-          this.onBestChange(this.best);
-        }
-      });
-    } catch (err) {
-      console.error('High score init failed', err);
-    }
-  }
-
-  async _saveHighScoreIfNeeded() {
-    if (!this.highScoreCollection || !this.highScoreRecordId) return;
-    if (this.score <= this.best) return;
-    try {
-      this.best = this.score;
-      this.onBestChange(this.best);
-      await this.highScoreCollection.update(this.highScoreRecordId, {
-        bestScore: this.best,
-        bestMode: this.mode,
-      });
-    } catch (err) {
-      console.error('High score update failed', err);
-    }
-  }
-
-  /* ---------- Public API ---------- */
+  /* ---------------- API ---------------- */
 
   start() {
-    this.lastTime = performance.now();
-    requestAnimationFrame(this._renderLoop);
+    this.reset();
+    this.isRunning = true;
+    this.renderer.setAnimationLoop(this._loop);
   }
 
-  handleResize() {
-    const w = this.container.clientWidth || window.innerWidth;
-    const h = this.container.clientHeight || window.innerHeight;
+  restart() {
+    this.reset();
+    this.isRunning = true;
+  }
+
+  resize() {
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
   }
 
-  setMode(mode) {
-    if (mode === this.mode) return;
-    this.mode = mode;
-    this._resetGame();
-    this._syncPresence();
+  setMode(m) {
+    this.mode = m;
+    this.restart();
   }
 
-  /* ---------- Game loop ---------- */
+  /* ---------------- LOOP ---------------- */
 
-  _renderLoop(now) {
-    const dt = now - this.lastTime;
-    this.lastTime = now;
-    this.tickTimer += dt;
+  _loop() {
+    const dt = this.clock.getDelta();
+    
+    if (this.isRunning) {
+      this.tickTimer += dt * 1000;
+      
+      // Fixed tick updates
+      while (this.tickTimer >= TICK_MS) {
+        this.tickTimer -= TICK_MS;
+        this._tick();
+      }
+      
+      // Interpolation factor (0 to 1)
+      const alpha = this.tickTimer / TICK_MS;
+      
+      // Smooth movement updates
+      this._updateVisuals(alpha);
+      this._processInput();
+      this._updateCamera();
+    }
+    
+    // Rotate background/planet slightly
+    this.gridMesh.rotation.y += dt * 0.05;
 
-    while (this.tickTimer >= TICK_MS) {
-      this.tickTimer -= TICK_MS;
-      this._tick();
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  /* ---------------- LOGIC ---------------- */
+
+  reset() {
+    this.score = 0;
+    this.onScore(0);
+    this.tickTimer = 0;
+    
+    // Init Player
+    this.snake.dir = { lat: 0, lon: 1 };
+    this.snake.nextDir = { lat: 0, lon: 1 };
+    this.snake.segments = [];
+    
+    const startLat = Math.floor(GRID_LAT / 2);
+    const startLon = Math.floor(GRID_LON / 4);
+    
+    for (let i = 0; i < 5; i++) {
+      this.snake.segments.push({
+        lat: startLat,
+        lon: (startLon - i + GRID_LON) % GRID_LON,
+        visualPos: new THREE.Vector3(), // For interpolation
+        currPos: new THREE.Vector3(),
+        prevPos: new THREE.Vector3()
+      });
     }
 
-    this._updateCamera();
-    this.renderer.render(this.scene, this.camera);
-    requestAnimationFrame(this._renderLoop);
+    // Init CPU
+    this.cpuSnake.dir = { lat: 0, lon: -1 };
+    this.cpuSnake.segments = [];
+    const cpuLat = Math.floor(GRID_LAT / 2);
+    const cpuLon = Math.floor(GRID_LON * 0.75);
+    
+    for (let i = 0; i < 5; i++) {
+      this.cpuSnake.segments.push({
+        lat: cpuLat,
+        lon: (cpuLon + i) % GRID_LON,
+        visualPos: new THREE.Vector3(),
+        currPos: new THREE.Vector3(),
+        prevPos: new THREE.Vector3()
+      });
+    }
+
+    // Init visual meshes immediately
+    this._rebuildMeshes(this.snake, this.snakeGroup);
+    if (this.mode === MODES.CPU) {
+      this._rebuildMeshes(this.cpuSnake, this.opponentGroup);
+    } else {
+      this.opponentGroup.clear();
+    }
+
+    this._spawnFood();
+    this._sync();
   }
 
   _tick() {
-    if (this.isDead) {
-      this._resetGame();
+    // 1. Move Player
+    this.snake.dir = this.snake.nextDir;
+    this._moveSnake(this.snake);
+
+    // 2. Move CPU
+    if (this.mode === MODES.CPU) {
+      this._aiThink(this.cpuSnake);
+      this._moveSnake(this.cpuSnake);
+    }
+
+    // 3. Collision Checks
+    if (this._checkCollisions(this.snake)) {
+      this.isRunning = false;
+      this.onGameOver();
       return;
     }
-
-    // Apply pending direction
-    this.direction = this.pendingDir;
-
-    this._moveSnake(this.snake, this.direction);
-    if (this.mode === MODES.CPU) {
-      this._updateCpuDirection();
-      this._moveSnake(this.cpuSnake, this.cpuDir);
+    
+    // CPU Collision check (CPU just dies, doesn't end game unless you hit it)
+    if (this.mode === MODES.CPU && this._checkCollisions(this.cpuSnake, true)) {
+       // Respawn CPU
+       this._respawnCpu();
     }
 
-    // Food collection
-    if (this._snakeHeadEqualsFood(this.snake)) {
-      this.score += 1;
-      this.onScoreChange(this.score);
-      this.snake.length += 1;
-      this._spawnFood();
+    // 4. Food Logic
+    if (this._checkFood(this.snake)) {
+      this._growSnake(this.snake);
+      this.score++;
+      this.onScore(this.score);
       this._saveHighScoreIfNeeded();
+      this._spawnFood();
     }
-
-    if (this.mode === MODES.CPU && this._snakeHeadEqualsFood(this.cpuSnake)) {
-      this.cpuSnake.length += 1;
+    
+    if (this.mode === MODES.CPU && this._checkFood(this.cpuSnake)) {
+      this._growSnake(this.cpuSnake);
       this._spawnFood();
     }
 
-    // Collisions
-    if (this._checkSelfCollision(this.snake) || this._checkOutOfBounds(this.snake)) {
-      this.isDead = true;
-    }
+    // 5. Sync State for Visuals
+    // Update 'prevPos' and 'currPos' for all segments for interpolation
+    this._updateSegmentTargets(this.snake);
+    if (this.mode === MODES.CPU) this._updateSegmentTargets(this.cpuSnake);
 
-    if (this.mode === MODES.CPU) {
-      if (this._checkSnakeCollision(this.snake, this.cpuSnake)) {
-        this.isDead = true;
-      }
-    }
-
-    this._updateSnakeMeshes();
-    if (this.mode === MODES.CPU) {
-      this._updateCpuSnakeMeshes();
-    } else {
-      this._updatePresenceSnakeOnly();
-    }
+    // 6. Network
+    this._sync();
   }
 
-  _resetGame() {
-    this.score = 0;
-    this.onScoreChange(0);
-    this.isDead = false;
-
-    this.direction = { lat: 0, lon: 1 };
-    this.pendingDir = { lat: 0, lon: 1 };
-
-    this.snake.length = 6;
-    this.snake.headLat = Math.floor(GRID_LAT / 2);
-    this.snake.headLon = Math.floor(GRID_LON / 4);
-    this.snake.segments = {};
-    for (let i = 0; i < this.snake.length; i++) {
-      this.snake.segments[String(i)] = {
-        latIndex: this.snake.headLat,
-        lonIndex: (this.snake.headLon - i + GRID_LON) % GRID_LON,
-      };
+  _moveSnake(snake) {
+    const head = snake.segments[0];
+    const newLat = clamp(head.lat + snake.dir.lat, 0, GRID_LAT - 1);
+    const newLon = (head.lon + snake.dir.lon + GRID_LON) % GRID_LON;
+    
+    // Shift body logic
+    for (let i = snake.segments.length - 1; i > 0; i--) {
+      snake.segments[i].lat = snake.segments[i-1].lat;
+      snake.segments[i].lon = snake.segments[i-1].lon;
     }
-
-    this.cpuSnake.length = 6;
-    this.cpuSnake.headLat = Math.floor(GRID_LAT / 2);
-    this.cpuSnake.headLon = Math.floor((3 * GRID_LON) / 4);
-    this.cpuSnake.segments = {};
-    for (let i = 0; i < this.cpuSnake.length; i++) {
-      this.cpuSnake.segments[String(i)] = {
-        latIndex: this.cpuSnake.headLat,
-        lonIndex: (this.cpuSnake.headLon + i) % GRID_LON,
-      };
-    }
-    this.cpuDir = { lat: 0, lon: -1 };
-
-    this._rebuildSnakeMeshes();
-    this._rebuildCpuSnakeMeshes();
-    this._spawnFood();
-    this._syncPresence();
+    head.lat = newLat;
+    head.lon = newLon;
   }
 
-  /* ---------- Snake logic ---------- */
-
-  _moveSnake(snake, dir) {
-    const newHeadLat = clamp(
-      snake.headLat + dir.lat,
-      0,
-      GRID_LAT - 1
-    );
-    let newHeadLon = (snake.headLon + dir.lon + GRID_LON) % GRID_LON;
-
-    const newHead = { latIndex: newHeadLat, lonIndex: newHeadLon };
-    // Shift body
-    const newSegments = {};
-    newSegments['0'] = newHead;
-    const maxIdx = snake.length - 1;
-    for (let i = 1; i < snake.length; i++) {
-      const from = snake.segments[String(i - 1)];
-      if (!from) break;
-      newSegments[String(i)] = { latIndex: from.latIndex, lonIndex: from.lonIndex };
-    }
-    snake.segments = newSegments;
-    snake.headLat = newHeadLat;
-    snake.headLon = newHeadLon;
+  _growSnake(snake) {
+    const tail = snake.segments[snake.segments.length - 1];
+    snake.segments.push({
+      lat: tail.lat,
+      lon: tail.lon,
+      visualPos: tail.visualPos.clone(),
+      currPos: tail.currPos.clone(),
+      prevPos: tail.prevPos.clone()
+    });
+    // Add mesh
+    const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+    const mat = new THREE.MeshStandardMaterial({
+      color: snake.color,
+      emissive: snake.color,
+      emissiveIntensity: 0.5
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    snake.group.add(mesh);
   }
 
-  _snakeHeadEqualsFood(snake) {
-    return snake.headLat === this.foodLat && snake.headLon === this.foodLon;
-  }
+  _checkCollisions(snake, isCpu = false) {
+    const head = snake.segments[0];
+    
+    // Bounds (Lat only)
+    if (head.lat < 0 || head.lat >= GRID_LAT) return true;
 
-  _checkSelfCollision(snake) {
-    for (let i = 1; i < snake.length; i++) {
-      const seg = snake.segments[String(i)];
-      if (!seg) continue;
-      if (seg.latIndex === snake.headLat && seg.lonIndex === snake.headLon) {
-        return true;
-      }
+    // Self
+    for (let i = 1; i < snake.segments.length; i++) {
+      if (head.lat === snake.segments[i].lat && head.lon === snake.segments[i].lon) return true;
     }
+
+    // Against Other
+    if (!isCpu && this.mode === MODES.CPU) {
+       for (let seg of this.cpuSnake.segments) {
+         if (head.lat === seg.lat && head.lon === seg.lon) return true;
+       }
+    }
+    
     return false;
   }
 
-  _checkSnakeCollision(player, other) {
-    for (let i = 0; i < other.length; i++) {
-      const seg = other.segments[String(i)];
-      if (!seg) continue;
-      if (seg.latIndex === player.headLat && seg.lonIndex === player.headLon) {
-        return true;
-      }
-    }
-    return false;
+  _checkFood(snake) {
+    const head = snake.segments[0];
+    return head.lat === this.foodLat && head.lon === this.foodLon;
   }
-
-  _checkOutOfBounds(snake) {
-    return snake.headLat < 0 || snake.headLat >= GRID_LAT;
-  }
-
-  _updateCpuDirection() {
-    const dLat = Math.sign(this.foodLat - this.cpuSnake.headLat);
-    const dLon = shortestLonDir(this.cpuSnake.headLon, this.foodLon, GRID_LON);
-
-    let tryDir = { lat: 0, lon: 0 };
-    if (Math.abs(dLat) > 0) {
-      tryDir = { lat: dLat, lon: 0 };
-    } else if (dLon !== 0) {
-      tryDir = { lat: 0, lon: dLon };
-    }
-
-    if (!this._wouldCollide(this.cpuSnake, tryDir)) {
-      this.cpuDir = tryDir;
-    } else {
-      const options = [
-        { lat: 0, lon: 1 },
-        { lat: 0, lon: -1 },
-        { lat: 1, lon: 0 },
-        { lat: -1, lon: 0 },
-      ].filter((o) => !(o.lat === -this.cpuDir.lat && o.lon === -this.cpuDir.lon));
-
-      for (const o of options) {
-        if (!this._wouldCollide(this.cpuSnake, o)) {
-          this.cpuDir = o;
-          break;
-        }
-      }
-    }
-  }
-
-  _wouldCollide(snake, dir) {
-    const lat = snake.headLat + dir.lat;
-    const lon = (snake.headLon + dir.lon + GRID_LON) % GRID_LON;
-    if (lat < 0 || lat >= GRID_LAT) return true;
-    for (let i = 0; i < snake.length; i++) {
-      const seg = snake.segments[String(i)];
-      if (!seg) continue;
-      if (seg.latIndex === lat && seg.lonIndex === lon) {
-        return true;
-      }
-    }
-    return false;
-  }
-
+  
   _spawnFood() {
     this.foodLat = Math.floor(Math.random() * GRID_LAT);
     this.foodLon = Math.floor(Math.random() * GRID_LON);
-    const pos = cellToWorld(this.foodLat, this.foodLon);
+    const pos = getCellPosition(this.foodLat, this.foodLon, RADIUS);
     this.foodMesh.position.copy(pos);
+    this.foodMesh.lookAt(new THREE.Vector3(0,0,0));
   }
-
-  /* ---------- Input helpers ---------- */
-
-  _updateDirectionFromKeys() {
-    const { w, a, s, d } = this.keys;
-    let dir = null;
-    if (w) dir = { lat: -1, lon: 0 };
-    else if (s) dir = { lat: 1, lon: 0 };
-    else if (a) dir = { lat: 0, lon: -1 };
-    else if (d) dir = { lat: 0, lon: 1 };
-    if (!dir) return;
-    if (dir.lat === -this.direction.lat && dir.lon === -this.direction.lon) return;
-    this.pendingDir = dir;
-  }
-
-  _updateDirectionFromAngle(angleDeg) {
-    // kept for potential future use; not used now
-  }
-
-  _updateDirectionFromTap(event) {
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    const cx = rect.width / 2;
-    const cy = rect.height / 2;
-    const dx = x - cx;
-    const dy = y - cy;
-
-    let dir = null;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      // horizontal tap: left/right
-      dir = dx > 0 ? { lat: 0, lon: 1 } : { lat: 0, lon: -1 };
-    } else {
-      // vertical tap: up/down
-      dir = dy > 0 ? { lat: 1, lon: 0 } : { lat: -1, lon: 0 };
+  
+  _respawnCpu() {
+    // Simplified respawn
+    this.cpuSnake.segments = [];
+    const cpuLat = Math.floor(GRID_LAT / 2);
+    const cpuLon = Math.floor(Math.random() * GRID_LON);
+    for (let i = 0; i < 5; i++) {
+      this.cpuSnake.segments.push({
+        lat: cpuLat,
+        lon: (cpuLon + i) % GRID_LON,
+        visualPos: new THREE.Vector3(),
+        currPos: new THREE.Vector3(),
+        prevPos: new THREE.Vector3()
+      });
     }
-
-    if (!dir) return;
-    if (dir.lat === -this.direction.lat && dir.lon === -this.direction.lon) return;
-    this.pendingDir = dir;
+    this._rebuildMeshes(this.cpuSnake, this.opponentGroup);
   }
 
-  /* ---------- Mesh updates ---------- */
+  /* ---------------- CONTROLS & AI ---------------- */
 
-  _rebuildSnakeMeshes() {
-    this.snakeGroup.clear();
-    this.snakeMeshes = {};
-    const mat = new THREE.MeshStandardMaterial({
-      color: this.snake.color,
-      emissive: this.snake.color,
-      emissiveIntensity: 0.4,
-      roughness: 0.3,
-      metalness: 0.2,
+  _processInput() {
+    // Desktop Keys
+    if (this.keys.ArrowUp) this._attemptTurn({ lat: 1, lon: 0 }); // Note: Lat increases UP?
+    // Actually in 3D sphere:
+    // Lat 0 = top, Lat Max = bottom? Or Lat 0 = North pole?
+    // In our math: lat index 0..GRID_LAT.
+    // Let's assume index 0 is North Pole (Top), GRID_LAT is South.
+    // So "UP" key should DECREASE lat index.
+    if (this.keys.ArrowUp) this._attemptTurn({ lat: 1, lon: 0 });
+    if (this.keys.ArrowDown) this._attemptTurn({ lat: -1, lon: 0 });
+    if (this.keys.ArrowLeft) this._attemptTurn({ lat: 0, lon: -1 });
+    if (this.keys.ArrowRight) this._attemptTurn({ lat: 0, lon: 1 });
+  }
+
+  _attemptTurn(newDir) {
+    // Prevent 180 reverses
+    if (newDir.lat === -this.snake.dir.lat && newDir.lon === -this.snake.dir.lon) return;
+    this.snake.nextDir = newDir;
+  }
+
+  _aiThink(snake) {
+    // Simple greedy AI
+    const head = snake.segments[0];
+    const dLat = this.foodLat - head.lat;
+    
+    // Shortest path around longitude
+    let dLon = this.foodLon - head.lon;
+    if (dLon > GRID_LON/2) dLon -= GRID_LON;
+    if (dLon < -GRID_LON/2) dLon += GRID_LON;
+
+    const moves = [
+      { lat: 1, lon: 0 }, { lat: -1, lon: 0 },
+      { lat: 0, lon: 1 }, { lat: 0, lon: -1 }
+    ];
+    
+    // Sort moves by distance to food
+    moves.sort((a, b) => {
+      // Just approximate distance
+      const distA = Math.abs((head.lat + a.lat) - this.foodLat) + Math.abs(dLon - a.lon); // rough
+      const distB = Math.abs((head.lat + b.lat) - this.foodLat) + Math.abs(dLon - b.lon);
+      return distA - distB;
     });
+
+    for (let m of moves) {
+      if (m.lat === -snake.dir.lat && m.lon === -snake.dir.lon) continue;
+      // Check collision
+      const checkLat = head.lat + m.lat;
+      const checkLon = (head.lon + m.lon + GRID_LON) % GRID_LON;
+      
+      let safe = true;
+      if (checkLat < 0 || checkLat >= GRID_LAT) safe = false;
+      
+      // Self collision
+      for (let s of snake.segments) {
+        if (s.lat === checkLat && s.lon === checkLon) safe = false;
+      }
+      
+      if (safe) {
+        snake.dir = m;
+        return;
+      }
+    }
+  }
+
+  /* ---------------- VISUALS ---------------- */
+
+  _rebuildMeshes(snakeObj, group) {
+    group.clear();
+    snakeObj.group = group; // ref
+    
+    const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+    const mat = new THREE.MeshStandardMaterial({
+      color: snakeObj.color,
+      emissive: snakeObj.color,
+      emissiveIntensity: 0.5,
+      roughness: 0.2,
+      metalness: 0.5
+    });
+    
+    const headGeo = new THREE.BoxGeometry(0.9, 0.9, 0.9);
     const headMat = mat.clone();
-    headMat.emissiveIntensity = 0.8;
-    const geo = new THREE.SphereGeometry(0.32, 16, 12);
+    headMat.emissiveIntensity = 1.0;
 
-    for (let i = 0; i < this.snake.length; i++) {
-      const segMesh = new THREE.Mesh(geo, i === 0 ? headMat : mat);
-      this.snakeGroup.add(segMesh);
-      this.snakeMeshes[String(i)] = segMesh;
-    }
-    this._updateSnakeMeshes();
-  }
-
-  _updateSnakeMeshes() {
-    for (let i = 0; i < this.snake.length; i++) {
-      const seg = this.snake.segments[String(i)];
-      const mesh = this.snakeMeshes[String(i)];
-      if (!seg || !mesh) continue;
-      const pos = cellToWorld(seg.latIndex, seg.lonIndex);
+    snakeObj.segments.forEach((seg, i) => {
+      const mesh = new THREE.Mesh(i===0 ? headGeo : geo, i===0 ? headMat : mat);
+      group.add(mesh);
+      
+      // Init visual positions
+      const pos = getCellPosition(seg.lat, seg.lon, RADIUS);
+      seg.currPos.copy(pos);
+      seg.prevPos.copy(pos);
       mesh.position.copy(pos);
-    }
-    this._syncPresence();
-  }
-
-  _rebuildCpuSnakeMeshes() {
-    if (!this.cpuGroup) {
-      this.cpuGroup = new THREE.Group();
-      this.scene.add(this.cpuGroup);
-    } else {
-      this.cpuGroup.clear();
-    }
-    this.cpuMeshes = {};
-    const mat = new THREE.MeshStandardMaterial({
-      color: this.cpuSnake.color,
-      emissive: this.cpuSnake.color,
-      emissiveIntensity: 0.25,
-      roughness: 0.6,
-      metalness: 0.1,
+      mesh.lookAt(new THREE.Vector3(0,0,0));
     });
-    const geo = new THREE.SphereGeometry(0.28, 12, 10);
-
-    for (let i = 0; i < this.cpuSnake.length; i++) {
-      const segMesh = new THREE.Mesh(geo, mat);
-      this.cpuGroup.add(segMesh);
-      this.cpuMeshes[String(i)] = segMesh;
-    }
-    this._updateCpuSnakeMeshes();
   }
 
-  _updateCpuSnakeMeshes() {
-    for (let i = 0; i < this.cpuSnake.length; i++) {
-      const seg = this.cpuSnake.segments[String(i)];
-      const mesh = this.cpuMeshes[String(i)];
-      if (!seg || !mesh) continue;
-      const pos = cellToWorld(seg.latIndex, seg.lonIndex);
-      mesh.position.copy(pos);
+  _updateSegmentTargets(snake) {
+    snake.segments.forEach(seg => {
+      seg.prevPos.copy(seg.currPos); // The visual position from end of last tick
+      const target = getCellPosition(seg.lat, seg.lon, RADIUS);
+      seg.currPos.copy(target);
+    });
+  }
+
+  _updateVisuals(alpha) {
+    // Lerp meshes
+    [this.snake, this.cpuSnake].forEach(s => {
+      if (s.group) {
+        s.group.children.forEach((mesh, i) => {
+          if (s.segments[i]) {
+            const seg = s.segments[i];
+            // Slerp on sphere surface would be ideal, but lerp is okay for small steps
+            mesh.position.lerpVectors(seg.prevPos, seg.currPos, alpha);
+            mesh.lookAt(new THREE.Vector3(0,0,0));
+            // Optional: Scale effect on food eat?
+          }
+        });
+      }
+    });
+
+    if (this.mode === MODES.REALTIME) {
+       this.opponentGroup.children.forEach(g => {
+         // Interpolate opponent groups if we implemented full buffer...
+         // For now, just snap or basic smoothing handled in _updateOpponents
+       });
     }
   }
 
   _updateCamera() {
-    if (!this.snake) return;
-    const headPos = cellToWorld(this.snake.headLat, this.snake.headLon);
+    if (!this.snake.segments[0]) return;
+    const headMesh = this.snake.group.children[0];
+    if (!headMesh) return;
+
+    const headPos = headMesh.position.clone();
     const normal = headPos.clone().normalize();
-    const desiredPos = headPos.clone().add(normal.multiplyScalar(7));
-    // smooth follow
-    this.camera.position.lerp(desiredPos, 0.15);
-    this.camera.lookAt(headPos);
+    
+    // Position camera "above" and "behind"
+    // We need a "forward" vector. 
+    // Since we are on a sphere, "forward" is tangential.
+    // We can approximate by taking (Head - PreviousHead).
+    // Or just simply pull camera out along normal and add some lag.
+
+    const targetCamPos = normal.multiplyScalar(RADIUS + 25);
+    
+    // Smooth camera
+    this.camera.position.lerp(targetCamPos, 0.1);
+    this.camera.lookAt(headPos); // Always look at head
   }
 
-  /* ---------- Realtime presence rendering ---------- */
+  /* ---------------- HIGH SCORE & NET ---------------- */
 
-  _updatePresenceSnakeOnly() {
-    if (!this.room) return;
-    this._syncPresence();
-  }
-
-  _updateOtherSnakesFromPresence(presence) {
-    if (!this.room) return;
-    const clientId = this.room.clientId;
-    this.otherSnakesGroup.clear();
-
-    Object.entries(presence || {}).forEach(([id, p]) => {
-      if (id === clientId) return;
-      if (!p || p.mode !== MODES.REALTIME || !p.snake) return;
-      const snakeObj = unpackSnake(p.snake);
-      const group = new THREE.Group();
-      const color = '#5b8cff';
-      const mat = new THREE.MeshStandardMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: 0.25,
-        roughness: 0.4,
-      });
-      const geo = new THREE.SphereGeometry(0.28, 12, 10);
-      for (let i = 0; i < snakeObj.length; i++) {
-        const seg = snakeObj.segments[String(i)];
-        if (!seg) continue;
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.copy(cellToWorld(seg.latIndex, seg.lonIndex));
-        group.add(mesh);
+  async _loadHighScore() {
+    // ... reused logic ...
+    try {
+      const room = this.room || new WebsimSocket();
+      this.hsCol = room.collection('sphere_snake_hs_v2'); // new version
+      const records = await this.hsCol.getList();
+      if (records.length) {
+        this.hsId = records[0].id;
+        this.best = records[0].score || 0;
+      } else {
+        const res = await this.hsCol.create({ score: 0 });
+        this.hsId = res.id;
       }
-      this.otherSnakesGroup.add(group);
+      this.onBest(this.best);
+    } catch(e) {}
+  }
+
+  async _saveHighScoreIfNeeded() {
+    if (this.score > this.best && this.hsCol && this.hsId) {
+      this.best = this.score;
+      this.onBest(this.best);
+      this.hsCol.update(this.hsId, { score: this.best });
+    }
+  }
+
+  _sync() {
+    if (!this.room) return;
+    const data = this.snake.segments.map(s => ({ la: s.lat, lo: s.lon }));
+    this.room.updatePresence({
+      snake: data,
+      mode: this.mode
+    });
+  }
+
+  _updateOpponents(peers) {
+    this.opponentGroup.clear();
+    const myId = this.room.clientId;
+    
+    Object.entries(peers).forEach(([id, data]) => {
+      if (id === myId) return;
+      if (!data.snake || data.mode !== MODES.REALTIME) return;
+      
+      const group = new THREE.Group();
+      const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x5588ff, emissive: 0x2244aa });
+      
+      data.snake.forEach(seg => {
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.copy(getCellPosition(seg.la, seg.lo, RADIUS));
+        mesh.lookAt(new THREE.Vector3(0,0,0));
+        group.add(mesh);
+      });
+      
+      this.opponentGroup.add(group);
     });
   }
 }
 
-/* ---------- Helpers ---------- */
+/* ---------------- HELPERS ---------------- */
 
-function latLonToVec3(latRad, lonRad, radius) {
-  const y = Math.sin(latRad) * radius;
-  const x = Math.cos(latRad) * Math.cos(lonRad) * radius;
-  const z = Math.cos(latRad) * Math.sin(lonRad) * radius;
+function getCellPosition(latIdx, lonIdx, r) {
+  // Map grid to Sphere
+  // Lat: 0 to GRID_LAT. 0 = North Pole? No, let's map 0..LAT to -PI/2 .. PI/2
+  // Avoid poles slightly to prevent texture pinching if we had textures, but for grid it's fine.
+  
+  const phi = (latIdx / (GRID_LAT - 1)) * Math.PI; // 0 to PI
+  const theta = (lonIdx / GRID_LON) * (Math.PI * 2); // 0 to 2PI
+
+  // Spherical to Cartesian
+  // y is up
+  const x = r * Math.sin(phi) * Math.cos(theta);
+  const z = r * Math.sin(phi) * Math.sin(theta);
+  const y = r * Math.cos(phi);
+  
   return new THREE.Vector3(x, y, z);
 }
 
-function cellToWorld(latIndex, lonIndex) {
-  const lat = ((latIndex + 0.5) / GRID_LAT) * Math.PI - Math.PI / 2;
-  const lon = ((lonIndex + 0.5) / GRID_LON) * Math.PI * 2;
-  return latLonToVec3(lat, lon, RADIUS + 0.02);
-}
-
-function clamp(v, min, max) {
-  return v < min ? min : v > max ? max : v;
-}
-
-function shortestLonDir(from, to, max) {
-  const diff = ((to - from + max) % max);
-  if (diff === 0) return 0;
-  return diff <= max / 2 ? 1 : -1;
-}
-
-function packSnake(snake) {
-  const segmentsObj = {};
-  Object.keys(snake.segments).forEach((k) => {
-    const seg = snake.segments[k];
-    segmentsObj[k] = { la: seg.latIndex, lo: seg.lonIndex };
-  });
-  return {
-    length: snake.length,
-    headLat: snake.headLat,
-    headLon: snake.headLon,
-    segments: segmentsObj,
-  };
-}
-
-function unpackSnake(data) {
-  const segments = {};
-  Object.keys(data.segments || {}).forEach((k) => {
-    const seg = data.segments[k];
-    segments[k] = { latIndex: seg.la, lonIndex: seg.lo };
-  });
-  return {
-    length: data.length,
-    headLat: data.headLat,
-    headLon: data.headLon,
-    segments,
-  };
+function clamp(val, min, max) {
+  return Math.max(min, Math.min(max, val));
 }

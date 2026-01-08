@@ -1,35 +1,54 @@
 import { SphereSnakeGame } from './sphereGame.js';
 
 const appEl = document.getElementById('app');
-const scoreEl = document.getElementById('score-value');
-const bestEl = document.getElementById('best-value');
-const modeCpuBtn = document.getElementById('mode-cpu');
-const modeRtBtn = document.getElementById('mode-rt');
+const scoreEl = document.getElementById('score-val');
+const bestEl = document.getElementById('best-val');
+const finalScoreEl = document.getElementById('final-score');
+const gameOverModal = document.getElementById('game-over-modal');
+const restartBtn = document.getElementById('restart-btn');
 
+const btnCpu = document.getElementById('btn-cpu');
+const btnMulti = document.getElementById('btn-multi');
+
+// Game instance
 const game = new SphereSnakeGame({
   container: appEl,
-  onScoreChange: (score) => {
-    if (scoreEl) scoreEl.textContent = String(score);
+  onScore: (s) => {
+    if (scoreEl) scoreEl.textContent = s;
+    if (finalScoreEl) finalScoreEl.textContent = s;
   },
-  onBestChange: (best) => {
-    if (bestEl) bestEl.textContent = String(best);
+  onBest: (b) => {
+    if (bestEl) bestEl.textContent = b;
   },
+  onGameOver: () => {
+    gameOverModal.classList.add('visible');
+  }
 });
 
-modeCpuBtn.addEventListener('click', () => {
-  modeCpuBtn.classList.add('active');
-  modeRtBtn.classList.remove('active');
+// UI Logic
+btnCpu.addEventListener('click', () => {
+  btnCpu.classList.add('active');
+  btnMulti.classList.remove('active');
   game.setMode('cpu');
+  resetUI();
 });
 
-modeRtBtn.addEventListener('click', () => {
-  modeRtBtn.classList.add('active');
-  modeCpuBtn.classList.remove('active');
+btnMulti.addEventListener('click', () => {
+  btnMulti.classList.add('active');
+  btnCpu.classList.remove('active');
   game.setMode('realtime');
+  resetUI();
 });
 
-// Resize handling
-window.addEventListener('resize', () => game.handleResize());
+restartBtn.addEventListener('click', () => {
+  game.restart();
+  resetUI();
+});
 
-// Start
+function resetUI() {
+  gameOverModal.classList.remove('visible');
+}
+
+window.addEventListener('resize', () => game.resize());
+
 game.start();
