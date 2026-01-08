@@ -1,6 +1,4 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import nipplejs from 'nipplejs';
 
 const GRID_LAT = 24;
 const GRID_LON = 48;
@@ -43,14 +41,6 @@ export class SphereSnakeGame {
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);
     this.renderer.setSize(w, h);
     this.container.appendChild(this.renderer.domElement);
-
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enablePan = false;
-    this.controls.enableZoom = false;
-    this.controls.minPolarAngle = 0.4;
-    this.controls.maxPolarAngle = Math.PI - 0.4;
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.08;
 
     const ambient = new THREE.AmbientLight('#9fb8ff', 0.5);
     this.scene.add(ambient);
@@ -187,24 +177,10 @@ export class SphereSnakeGame {
       }
     });
 
-    // Mobile joystick
-    const joystickEl = document.getElementById('joystick');
-    if (joystickEl) {
-      this.joystickManager = nipplejs.create({
-        zone: joystickEl,
-        mode: 'static',
-        position: { right: '55px', bottom: '55px' },
-        color: '#2fffd2',
-        size: 90,
-      });
-      this.joystickManager.on('move', (_, data) => {
-        const angle = data.angle.degree; // 0-360
-        this._updateDirectionFromAngle(angle);
-      });
-      this.joystickManager.on('end', () => {
-        // no-op: keep last direction
-      });
-    }
+    // Tap / click to change direction
+    this.renderer.domElement.addEventListener('pointerdown', (event) => {
+      this._updateDirectionFromTap(event);
+    });
   }
 
   _initMultiplayer() {
@@ -324,7 +300,7 @@ export class SphereSnakeGame {
       this._tick();
     }
 
-    this.controls.update();
+    this._updateCamera();
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this._renderLoop);
   }
@@ -535,21 +511,27 @@ export class SphereSnakeGame {
   }
 
   _updateDirectionFromAngle(angleDeg) {
-    // 0 = right, 90 = down (screen coordinates); map to grid
-    const sectors = [
-      { min: 315, max: 360, dir: { lat: 0, lon: 1 } },
-      { min: 0, max: 45, dir: { lat: 0, lon: 1 } },    // right
-      { min: 45, max: 135, dir: { lat: 1, lon: 0 } },  // down
-      { min: 135, max: 225, dir: { lat: 0, lon: -1 }}, // left
-      { min: 225, max: 315, dir: { lat: -1, lon: 0 }}, // up
-    ];
+    // kept for potential future use; not used now
+  }
+
+  _updateDirectionFromTap(event) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const dx = x - cx;
+    const dy = y - cy;
+
     let dir = null;
-    for (const s of sectors) {
-      if (angleDeg >= s.min && angleDeg < s.max) {
-        dir = s.dir;
-        break;
-      }
+    if (Math.abs(dx) > Math.abs(dy)) {
+      // horizontal tap: left/right
+      dir = dx > 0 ? { lat: 0, lon: 1 } : { lat: 0, lon: -1 };
+    } else {
+      // vertical tap: up/down
+      dir = dy > 0 ? { lat: 1, lon: 0 } : { lat: -1, lon: 0 };
     }
+
     if (!dir) return;
     if (dir.lat === -this.direction.lat && dir.lon === -this.direction.lon) return;
     this.pendingDir = dir;
@@ -623,6 +605,16 @@ export class SphereSnakeGame {
       const pos = cellToWorld(seg.latIndex, seg.lonIndex);
       mesh.position.copy(pos);
     }
+  }
+
+  _updateCamera() {
+    if (!this.snake) return;
+    const headPos = cellToWorld(this.snake.headLat, this.snake.headLon);
+    const normal = headPos.clone().normalize();
+    const desiredPos = headPos.clone().add(normal.multiplyScalar(3.2));
+    // smooth follow
+    this.camera.position.lerp(desiredPos, 0.15);
+    this.camera.lookAt(headPos);
   }
 
   /* ---------- Realtime presence rendering ---------- */
