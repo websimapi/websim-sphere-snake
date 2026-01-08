@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sphere Snake</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #050608;
+      touch-action: none;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #f5f5f5;
+    }
+    #app {
+      position: fixed;
+      inset: 0;
+    }
+    canvas {
+      display: block;
+    }
+    .ui-root {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 10px 10px 14px;
+      box-sizing: border-box;
+    }
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      pointer-events: auto;
+    }
+    .pill {
+      background: rgba(10, 12, 16, 0.9);
+      border-radius: 999px;
+      padding: 6px 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 0 12px rgba(0, 0, 0, 0.5);
+    }
+    .pill label {
+      opacity: 0.7;
+    }
+    .pill strong {
+      font-weight: 600;
+    }
+    .mode-switch {
+      display: inline-flex;
+      background: rgba(10, 12, 16, 0.9);
+      border-radius: 999px;
+      padding: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 0 12px rgba(0, 0, 0, 0.5);
+      pointer-events: auto;
+    }
+    .mode-btn {
+      border: none;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 11px;
+      color: #d0d0d0;
+      background: transparent;
+      cursor: pointer;
+      min-width: 64px;
+    }
+    .mode-btn.active {
+      background: #1ea562;
+      color: #020304;
+      font-weight: 600;
+    }
+    .mode-btn.secondary {
+      background: #242834;
+      color: #f5f5f5;
+      font-weight: 500;
+    }
+    .bottom-bar {
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .hint {
+      font-size: 10px;
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    .joystick-container {
+      position: fixed;
+      right: 10px;
+      bottom: 18px;
+      width: 110px;
+      height: 110px;
+      pointer-events: auto;
+      touch-action: none;
+    }
+    @media (min-width: 800px) {
+      .joystick-container {
+        display: none;
+      }
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.160.0",
+      "three/addons/controls/OrbitControls.js": "https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js",
+      "nipplejs": "https://esm.sh/nipplejs@0.9.0"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div class="ui-root">
+    <div class="top-bar">
+      <div class="pill" id="score-pill">
+        <label>Score</label>
+        <strong id="score-value">0</strong>
+        <span style="opacity:.5;">•</span>
+        <label>Best</label>
+        <strong id="best-value">0</strong>
+      </div>
+      <div class="mode-switch">
+        <button class="mode-btn active" id="mode-cpu">CPU</button>
+        <button class="mode-btn" id="mode-rt">Realtime</button>
+      </div>
+    </div>
+    <div class="bottom-bar">
+      <div class="hint">WASD / joystick to steer around the sphere</div>
+    </div>
+  </div>
+
+  <div class="joystick-container" id="joystick"></div>
+
+  <script type="module" src="./main.js"></script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
